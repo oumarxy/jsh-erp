@@ -1,0 +1,333 @@
+<template>
+  <div ref="container">
+    <a-modal
+      :title="title"
+      :width="1300"
+      :visible="visible"
+      :getContainer="() => $refs.container"
+      :maskStyle="{ top: '93px', left: '154px' }"
+      :wrapClassName="wrapClassNameInfo()"
+      :mask="isDesktop()"
+      :maskClosable="false"
+      @cancel="handleCancel"
+      cancelText="Fermer"
+      style="top: 50px; height: 90%"
+    >
+      <template slot="footer">
+        <a-button @click="handleCancel">Fermer</a-button>
+      </template>
+      <!-- Zone de recherche -->
+      <div class="table-page-search-wrapper">
+        <!-- Zone de recherche -->
+        <a-form layout="inline" @keyup.enter.native="searchQuery">
+          <a-row :gutter="24">
+            <a-col :md="4" :sm="24" v-if="organLabel">
+              <a-form-item :label="organLabel" :labelCol="{ span: 5 }" :wrapperCol="{ span: 18, offset: 1 }">
+                <a-select
+                  placeholder="Veuillez sélectionner"
+                  v-model="queryParam.organId"
+                  :dropdownMatchSelectWidth="false"
+                  showSearch
+                  optionFilterProp="children"
+                  @search="handleSearchSupplier"
+                >
+                  <div slot="dropdownRender" slot-scope="menu">
+                    <v-nodes :vnodes="menu" />
+                    <a-divider style="margin: 4px 0" />
+                    <div class="dropdown-btn" @mousedown="(e) => e.preventDefault()" @click="loadSupplier(organLabel)">
+                      <a-icon type="reload" /> Actualiser la liste
+                    </div>
+                  </div>
+                  <a-select-option v-for="(item, index) in supplierList" :key="index" :value="item.id">
+                    {{ item.supplier }}
+                  </a-select-option>
+                </a-select>
+              </a-form-item>
+            </a-col>
+            <a-col :md="5" :sm="24">
+              <a-form-item label="Numéro" :labelCol="{ span: 5 }" :wrapperCol="{ span: 18, offset: 1 }">
+                <a-input placeholder="Veuillez saisir le numéro de document" v-model="queryParam.number"></a-input>
+              </a-form-item>
+            </a-col>
+            <a-col :md="5" :sm="24">
+              <a-form-item label="Produit" :labelCol="{ span: 5 }" :wrapperCol="{ span: 18, offset: 1 }">
+                <a-input
+                  placeholder="Code-barres|Nom|Spécification|Modèle"
+                  v-model="queryParam.materialParam"
+                ></a-input>
+              </a-form-item>
+            </a-col>
+            <a-col :md="6" :sm="24">
+              <a-form-item label="Date du document" :labelCol="labelCol" :wrapperCol="wrapperCol">
+                <a-range-picker
+                  style="width: 100%"
+                  v-model="queryParam.createTimeRange"
+                  format="YYYY-MM-DD"
+                  :placeholder="['Heure de début', 'Heure de fin']"
+                  @change="onDateChange"
+                  @ok="onDateOk"
+                />
+              </a-form-item>
+            </a-col>
+            <span style="float: left; overflow: hidden" class="table-page-search-submitButtons">
+              <a-col :md="4" :sm="24">
+                <a-button type="primary" @click="searchQuery">Rechercher</a-button>
+                <a-button style="margin-left: 8px" @click="searchReset">Réinitialiser</a-button>
+              </a-col>
+            </span>
+          </a-row>
+        </a-form>
+      </div>
+      <!-- Zone du tableau - début -->
+      <a-table
+        bordered
+        ref="table"
+        size="middle"
+        rowKey="id"
+        :columns="columns"
+        :dataSource="dataSource"
+        :components="handleDrag(columns)"
+        :pagination="ipagination"
+        :loading="loading"
+        @change="handleTableChange"
+      >
+        <span slot="numberCustomRender" slot-scope="text, record">
+          <a @click="myHandleDetail(record)">{{ record.number }}</a>
+        </span>
+        <template slot="customRenderStatus" slot-scope="text, record">
+          <a-tag v-if="record.status === '0'" color="red">Non audité</a-tag>
+          <a-tag v-if="record.status === '1'" color="green">Audité</a-tag>
+          <a-tag v-if="record.status === '2' && queryParam.subType === '采购订单'" color="cyan">Achat terminé</a-tag>
+          <a-tag v-if="record.status === '2' && queryParam.subType === '销售订单'" color="cyan">Vente terminée</a-tag>
+          <a-tag v-if="record.status === '3' && queryParam.subType === '采购订单'" color="blue">Achat partiel</a-tag>
+          <a-tag v-if="record.status === '3' && queryParam.subType === '销售订单'" color="blue">Vente partielle</a-tag>
+          <a-tag v-if="record.status === '9' && queryParam.subType === '采购订单'" color="orange"
+            >En cours d'audit</a-tag
+          >
+          <a-tag v-if="record.status === '9' && queryParam.subType === '销售订单'" color="orange"
+            >En cours d'audit</a-tag
+          >
+        </template>
+      </a-table>
+      <!-- Zone du tableau - fin -->
+      <!-- Zone du formulaire -->
+      <bill-detail ref="billDetail"></bill-detail>
+    </a-modal>
+  </div>
+</template>
+
+<script>
+import BillDetail from './BillDetail'
+import { JeecgListMixin } from '@/mixins/JeecgListMixin'
+import { mixinDevice } from '@/utils/mixin'
+import { findBySelectSup, findBySelectCus, findBillDetailByNumber } from '@/api/api'
+import Vue from 'vue'
+export default {
+  name: 'HistoryBillList',
+  mixins: [JeecgListMixin, mixinDevice],
+  components: {
+    BillDetail,
+    VNodes: {
+      functional: true,
+      render: (h, ctx) => ctx.props.vnodes,
+    },
+  },
+  data() {
+    return {
+      title: 'Documents historiques',
+      visible: false,
+      disableMixinCreated: true,
+      organLabel: '',
+      supplierList: [],
+      queryParam: {
+        organId: undefined,
+        number: '',
+        materialParam: '',
+        type: '',
+        subType: '',
+        status: '',
+      },
+      labelCol: {
+        xs: { span: 24 },
+        sm: { span: 8 },
+      },
+      wrapperCol: {
+        xs: { span: 24 },
+        sm: { span: 16 },
+      },
+      // En-têtes de colonnes
+      columns: [
+        {
+          title: '#',
+          dataIndex: '',
+          key: 'rowIndex',
+          width: 40,
+          align: 'center',
+          customRender: function (t, r, index) {
+            return parseInt(index) + 1
+          },
+        },
+        { title: '', dataIndex: 'organName', width: 120, ellipsis: true },
+        {
+          title: 'Numéro de document',
+          dataIndex: 'number',
+          width: 150,
+          scopedSlots: { customRender: 'numberCustomRender' },
+        },
+        {
+          title: 'Informations produit',
+          dataIndex: 'materialsList',
+          width: 280,
+          ellipsis: true,
+          customRender: function (text, record, index) {
+            if (text) {
+              return text.replace(',', '，')
+            }
+          },
+        },
+        { title: 'Date du document', dataIndex: 'operTimeStr', width: 145 },
+        { title: 'Opérateur', dataIndex: 'userName', width: 70 },
+        { title: 'Quantité', dataIndex: 'materialCount', width: 50 },
+        { title: 'Montant total', dataIndex: 'totalPrice', width: 70 },
+        {
+          title: 'Total TTC',
+          dataIndex: 'totalTaxLastMoney',
+          width: 70,
+          customRender: function (text, record, index) {
+            if (record.discountLastMoney) {
+              return (record.discountMoney + record.discountLastMoney).toFixed(2)
+            } else {
+              return record.totalPrice
+            }
+          },
+        },
+        {
+          title: 'État',
+          dataIndex: 'status',
+          width: 70,
+          align: 'center',
+          scopedSlots: { customRender: 'customRenderStatus' },
+        },
+      ],
+      dataSource: [],
+      url: {
+        list: '/depotHead/list',
+      },
+    }
+  },
+  created() {},
+  methods: {
+    show(type, subType, organType, organId) {
+      this.queryParam.type = type
+      this.queryParam.subType = subType
+      this.organLabel = organType
+      this.model = Object.assign({}, {})
+      this.visible = true
+      this.initColumns(subType, organType)
+      this.loadSupplier(organType, organId)
+      this.loadData(1)
+    },
+    initColumns(subType, organType) {
+      for (let i = 0; i < this.columns.length; i++) {
+        if (this.columns[i].dataIndex === 'organName') {
+          this.columns[i].title = organType
+        }
+      }
+      if (subType === '请购单') {
+        for (let i = 0; i < this.columns.length; i++) {
+          if (this.columns[i].dataIndex === 'organName') {
+            this.columns.splice(i, 1)
+          }
+          if (this.columns[i].dataIndex === 'totalPrice') {
+            this.columns.splice(i, 1)
+          }
+          if (this.columns[i].dataIndex === 'totalTaxLastMoney') {
+            this.columns.splice(i, 1)
+          }
+        }
+      }
+    },
+    loadSupplier(organType, organId) {
+      if (organType === '供应商') {
+        findBySelectSup({ limit: 1 }).then((res) => {
+          if (res) {
+            this.supplierList = res
+            if (organId) {
+              this.queryParam.organId = organId
+              this.loadData(1)
+            }
+          }
+        })
+      } else if (organType === '客户') {
+        findBySelectCus({ limit: 1 }).then((res) => {
+          if (res) {
+            this.supplierList = res
+            if (organId) {
+              this.queryParam.organId = organId
+              this.loadData(1)
+            }
+          }
+        })
+      }
+    },
+    handleSearchSupplier(value) {
+      let that = this
+      if (this.setTimeFlag != null) {
+        clearTimeout(this.setTimeFlag)
+      }
+      if (this.organLabel === '供应商') {
+        this.setTimeFlag = setTimeout(() => {
+          findBySelectSup({ key: value, limit: 1 }).then((res) => {
+            if (res) {
+              that.supplierList = res
+            }
+          })
+        }, 500)
+      } else if (this.organLabel === '客户') {
+        this.setTimeFlag = setTimeout(() => {
+          findBySelectCus({ key: value, limit: 1 }).then((res) => {
+            if (res) {
+              that.supplierList = res
+            }
+          })
+        }, 500)
+      }
+    },
+    close() {
+      this.$emit('close')
+      this.visible = false
+    },
+    handleCancel() {
+      this.close()
+    },
+    onDateChange: function (value, dateString) {
+      this.queryParam.beginTime = dateString[0]
+      this.queryParam.endTime = dateString[1]
+    },
+    onDateOk(value) {
+      console.log(value)
+    },
+    searchReset() {
+      this.queryParam = {
+        type: this.queryParam.type,
+        subType: this.queryParam.subType,
+        status: '',
+      }
+      this.loadData(1)
+    },
+    myHandleDetail(record) {
+      let that = this
+      findBillDetailByNumber({ number: record.number }).then((res) => {
+        if (res && res.code === 200) {
+          let type = res.data.depotHeadType
+          type = type.replace('其它', '')
+          that.$refs.billDetail.show(res.data, type)
+          that.$refs.billDetail.title = 'Détails'
+        }
+      })
+    },
+  },
+}
+</script>
+
+<style scoped></style>
